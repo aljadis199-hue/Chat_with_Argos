@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="es" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Document AI — consulta tu documentación técnica</title>
+<meta name="description" content="Asistente local de documentación técnica: elige una carpeta del disco, indexa PDFs (con OCR para escaneados) y pregunta en lenguaje natural. Todo en tu navegador.">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="assets/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>📄</text></svg>">
+</head>
+<body>
+
+<!-- ══ Aviso de arranque fallido ═══════════════════════════════════════ -->
+<div class="boot-error" id="bootError" hidden>
+  <div class="boot-card">
+    <h1>Esta página necesita un servidor</h1>
+    <p class="boot-detail" id="bootErrorDetail"></p>
+
+    <p class="boot-lead">Tienes tres formas de abrirla bien:</p>
+    <ol class="boot-steps">
+      <li>
+        <strong>Publicada en GitHub Pages</strong> — la más cómoda para compartir.
+        Abre la dirección <code>https://tu-usuario.github.io/document-ai-web/</code>
+      </li>
+      <li>
+        <strong>Doble clic en <code>servir.bat</code></strong> (en esta misma carpeta).
+        Levanta un servidor local y abre el navegador solo. Requiere Python.
+      </li>
+      <li>
+        <strong>A mano</strong>, desde una terminal en esta carpeta:
+        <pre><code>python -m http.server 8080</code></pre>
+        y luego abre <code>http://localhost:8080</code>
+      </li>
+    </ol>
+
+    <p class="boot-note">
+      Servida localmente además funciona Ollama, que en GitHub Pages queda
+      bloqueado por ser una página HTTPS llamando a <code>localhost</code>.
+    </p>
+  </div>
+</div>
+
+<!-- ══ Cabecera ══════════════════════════════════════════════════════════ -->
+<header class="topbar">
+  <button type="button" class="nav-toggle" id="navToggle" aria-label="Mostrar el panel lateral" aria-expanded="false" aria-controls="sidebar">
+    <svg class="ico" aria-hidden="true" focusable="false"><use href="#i-menu"></use></svg>
+  </button>
+
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg class="ico" focusable="false"><use href="#i-doc"></use></svg>
+    </span>
+    <span class="brand-text">
+      <strong>Document AI</strong>
+      <small>Documentación técnica, consultable</small>
+    </span>
+  </div>
+
+  <div class="topbar-stats" id="topStats" aria-live="polite">
+    <span class="stat"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-doc"></use></svg><b id="statDocs">0</b> documentos</span>
+    <span class="stat"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-page"></use></svg><b id="statPages">0</b> páginas</span>
+    <span class="stat"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-layers"></use></svg><b id="statChunks">0</b> fragmentos</span>
+    <span class="stat" id="statOcrWrap"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-scan"></use></svg><b id="statOcr">0</b> pág. OCR</span>
+  </div>
+
+  <div class="topbar-actions">
+    <span class="chip" id="modeChip" title="Modo de respuesta">
+      <span class="dot" aria-hidden="true"></span><span id="modeChipText">Modo extractivo</span>
+    </span>
+    <button type="button" class="icon-btn" id="themeBtn" aria-label="Cambiar tema" title="Cambiar tema">
+      <svg class="ico" aria-hidden="true" focusable="false"><use href="#i-sun"></use></svg>
+    </button>
+  </div>
+</header>
+
+<div class="shell">
+
+  <!-- ══ Barra lateral ═══════════════════════════════════════════════════ -->
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="sidebar" id="sidebar" aria-label="Origen de los documentos">
+    <div class="sidebar-head">
+      <h2 class="sidebar-title">Origen de los documentos</h2>
+      <button type="button" class="icon-btn nav-close" id="navClose" aria-label="Cerrar el panel">
+        <svg class="ico" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg>
+      </button>
+    </div>
+
+    <!-- Fuentes: carpetas y archivos sueltos -->
+    <section class="panel">
+      <div class="panel-head">
+        <h3 class="panel-title"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-folder"></use></svg> Qué se indexa</h3>
+        <span class="badge" id="sourceCount">0</span>
+      </div>
+      <div class="panel-body">
+        <div class="pick-row">
+          <button type="button" class="btn btn-primary" id="pickDirBtn">
+            <svg class="ico" aria-hidden="true" focusable="false"><use href="#i-folder-open"></use></svg>
+            Carpeta
+          </button>
+          <button type="button" class="btn" id="pickFilesBtn">
+            <svg class="ico" aria-hidden="true" focusable="false"><use href="#i-file-plus"></use></svg>
+            Archivos
+          </button>
+        </div>
+
+        <p class="hint" id="pickHint">
+          Añade una carpeta entera (con sus subcarpetas) o elige documentos sueltos.
+          Puedes combinar varias fuentes. Nada se copia ni se sube: se lee en tu equipo.
+        </p>
+
+        <div class="fallback" id="fallbackWrap" hidden>
+          <p class="fallback-reason" id="fallbackReason"></p>
+          <div class="pick-row">
+            <label class="file-drop" for="dirInput">
+              <svg class="ico" aria-hidden="true" focusable="false"><use href="#i-folder-open"></use></svg>
+              <span>Carpeta</span>
+              <input type="file" id="dirInput" webkitdirectory directory multiple hidden>
+            </label>
+            <label class="file-drop" for="fileInput">
+              <svg class="ico" aria-hidden="true" focusable="false"><use href="#i-file-plus"></use></svg>
+              <span>Archivos</span>
+              <input type="file" id="fileInput" multiple accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp" hidden>
+            </label>
+          </div>
+        </div>
+
+        <ul class="source-items" id="sourceList"></ul>
+
+        <div class="panel-actions" id="scanActions" hidden>
+          <button type="button" class="btn btn-sm" id="scanBtn">
+            <svg class="ico" aria-hidden="true" focusable="false"><use href="#i-refresh"></use></svg> Barrer ahora
+          </button>
+          <button type="button" class="btn btn-sm btn-ghost" id="rescanBtn" title="Reprocesa todo, ignorando la caché">
+            Barrido completo
+          </button>
+        </div>
+
+        <label class="switch-row" for="autoScan">
+          <span class="switch-label">Revisar cada 60 s</span>
+          <input type="checkbox" id="autoScan" class="switch" checked>
+        </label>
+      </div>
+    </section>
+
+    <!-- Indexación -->
+    <section class="panel">
+      <div class="panel-head">
+        <h3 class="panel-title"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-activity"></use></svg> Indexación</h3>
+        <span class="pill" id="indexPill" data-state="idle">En reposo</span>
+      </div>
+      <div class="panel-body">
+        <div class="progress" role="progressbar" aria-labelledby="progressLabel" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progressBar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <p class="progress-label" id="progressLabel" aria-live="polite">Sin carpeta seleccionada.</p>
+
+        <div class="stat-grid">
+          <div class="stat-box"><span class="stat-k">En cola</span><span class="stat-v" id="queueCount">0</span></div>
+          <div class="stat-box"><span class="stat-k">Procesados</span><span class="stat-v" id="doneCount">0/0</span></div>
+          <div class="stat-box"><span class="stat-k">Último barrido</span><span class="stat-v" id="lastScan">—</span></div>
+        </div>
+
+        <p class="note note-ok" id="readyNote" hidden></p>
+
+        <details class="errors" id="errorsBox" hidden>
+          <summary><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-alert"></use></svg> <span id="errorsCount"></span></summary>
+          <ul class="error-list" id="errorList"></ul>
+        </details>
+      </div>
+    </section>
+
+    <!-- Documentos -->
+    <section class="panel">
+      <div class="panel-head">
+        <h3 class="panel-title"><svg class="ico" aria-hidden="true" focusable="false"><use href="#i-doc"></use></svg> Documentos indexados</h3>
+        <span class="badge" id="docCount">0</span>
+      </div>
+      <div class="panel-body">
+        <label class="sr-only" for="docFilter">Filtrar documentos por nombre</label>
+        <input type="search" id="docFilter" class="input" placeholder="Filtrar por nombre...">
+        <ul class="doc-list" id="docList"></ul>
+        <p class="empty-hint" id="docEmpty">Todavía no hay documentos indexados.</p>
+      </div>
+    </section>
+
+    <p class="sidebar-foot">
+      Los PDFs escaneados se procesan con OCR en tu propio navegador y quedan
+      consultables igual que los nativos de texto. Nada sale de tu equipo.
+    </p>
+  </aside>
+
+  <!-- ══ Chat ════════════════════════════════════════════════════════════ -->
+  <main class="main">
+    <div class="banner" id="banner" hidden>
+      <svg class="ico" aria-hidden="true" focusable="false"><use href="#i-alert"></use></svg>
+      <span class="banner-text" id="bannerText"></span>
+      <button type="button" class="btn btn-sm btn-ghost" id="bannerClose">Entendido</button>
+    </div>
+
+    <div class="chat-scroll" id="chatScroll">
+      <div class="chat-column" id="chatColumn">
+
+        <section class="welcome" id="welcome">
+          <h1>Pregunta a tu documentación</h1>
+          <p class="welcome-lead">
+            Elige la carpeta donde viven tus manuales, planos y fichas técnicas.
+            Se indexan en tu navegador, se les aplica <strong>OCR</strong> si están
+            escaneados, y cada respuesta cita <strong>documento y página</strong>.
+          </p>
+
+          <ol class="steps">
+            <li><span class="step-n">1</span><div><strong>Selecciona una carpeta</strong> del disco en el panel lateral.</div></li>
+            <li><span class="step-n">2</span><div><strong>Espera al indexador</strong>: verás el progreso en vivo.</div></li>
+            <li><span class="step-n">3</span><div><strong>Pregunta en lenguaje natural</strong>; cada respuesta trae sus fuentes.</div></li>
+          </ol>
+
+          <h2 class="examples-title">Preguntas de ejemplo</h2>
+          <div class="examples" id="examples">
+            <button type="button" class="example">¿Cuál es la presión máxima de operación indicada para el filtro de mangas?</button>
+            <button type="button" class="example">¿Cada cuántas horas se lubrica el reductor del molino y con qué grasa?</button>
+            <button type="button" class="example">Resume el procedimiento de bloqueo y etiquetado del equipo.</button>
+            <button type="button" class="example">¿Qué torque de apriete especifica el manual para los pernos de la carcasa?</button>
+          </div>
+        </section>
+
+        <div class="messages" id="messages" aria-live="polite" aria-relevant="additions"></div>
+      </div>
+    </div>
+
+    <div class="composer">
+      <form class="composer-form" id="askForm">
+        <label class="sr-only" for="question">Escribe tu pregunta</label>
+        <textarea id="question" class="composer-input" rows="1" placeholder="Pregunta sobre tus documentos..." autocomplete="off"></textarea>
+        <button type="submit" class="btn btn-primary send-btn" id="sendBtn" aria-label="Enviar la pregunta">
+          <svg class="ico" aria-hidden="true" focusable="false"><use href="#i-send"></use></svg>
+        </button>
+      </form>
+      <div class="composer-foot">
+        <span class="keys"><kbd>Enter</kbd> envía · <kbd>Shift</kbd>+<kbd>Enter</kbd> nueva línea</span>
+        <span class="composer-status" id="composerStatus"></span>
+        <button type="button" class="btn btn-sm btn-ghost" id="clearChat">
+          <svg class="ico" aria-hidden="true" focusable="false"><use href="#i-eraser"></use></svg> Borrar conversación
+        </button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ══ Crédito ═════════════════════════════════════════════════════════ -->
+<footer class="credit">
+  Creado por <strong>Aljadis Sánchez</strong>
+</footer>
+
+<!-- ══ Toasts y diálogo ════════════════════════════════════════════════ -->
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+<dialog class="dialog" id="dialog">
+  <form method="dialog" class="dialog-form">
+    <h2 class="dialog-title" id="dialogTitle"></h2>
+    <p class="dialog-body" id="dialogBody"></p>
+    <div class="dialog-actions">
+      <button type="submit" value="cancel" class="btn btn-ghost" id="dialogCancel">Cancelar</button>
+      <button type="submit" value="ok" class="btn btn-primary" id="dialogOk">Aceptar</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ══ Iconos ══════════════════════════════════════════════════════════ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></symbol>
+    <symbol id="i-page" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></symbol>
+    <symbol id="i-scan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M3 12h18"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+    <symbol id="i-folder-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1"/><path d="m3 9 2.5 9a2 2 0 0 0 2 1.5h11a2 2 0 0 0 2-1.5L23 9Z"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.5 2.5 4.5-5"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-quote" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7H4v6h6V7c0 4-1 6-3 7M20 7h-3v6h6V7c0 4-1 6-3 7"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+    <symbol id="i-eraser" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 15 6-6 8 8-3 3H8Z"/><path d="M11 9 15 5a2 2 0 0 1 3 0l3 3a2 2 0 0 1 0 3l-4 4"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 9 5-5 5 5"/><path d="M12 4v12"/></symbol>
+    <symbol id="i-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></symbol>
+    <symbol id="i-file-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 12v6M9 15h6"/></symbol>
+  </defs>
+</svg>
+
+<!-- Detector de arranque fallido.
+     Script clásico a propósito: si `app.js` no carga (típicamente por abrir el
+     archivo con doble clic, donde el navegador bloquea los módulos por CORS),
+     este sí se ejecuta y explica qué pasa. Sin esto la página se ve perfecta
+     pero ningún botón responde, que es el peor fallo posible: silencioso. -->
+<script>
+(function () {
+  var esArchivoLocal = location.protocol === 'file:';
+
+  function avisar() {
+    if (window.__docaiReady) return;
+    var caja = document.getElementById('bootError');
+    if (!caja) return;
+    document.getElementById('bootErrorDetail').textContent = esArchivoLocal
+      ? 'Has abierto el archivo con doble clic. Los navegadores bloquean por seguridad el código de páginas abiertas así (protocolo file://), por eso los botones no responden.'
+      : 'El código de la aplicación no se pudo cargar. Revisa la consola del navegador (F12) para ver el detalle.';
+    caja.hidden = false;
+  }
+
+  // Si es file:// no hay nada que esperar: el módulo no va a cargar.
+  // Si no, damos margen a que arranque antes de dar la alarma.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { setTimeout(avisar, esArchivoLocal ? 0 : 4000); });
+  } else {
+    setTimeout(avisar, esArchivoLocal ? 0 : 4000);
+  }
+})();
+</script>
+
+<script type="module" src="assets/app.js"></script>
+</body>
+</html>
